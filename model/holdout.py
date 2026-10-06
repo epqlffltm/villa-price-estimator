@@ -6,6 +6,7 @@
   - 맞혀 볼 대상(홀드아웃): 산출 기준일로부터 12개월 안의 거래
   - 대상과 같은 호로 보이는 거래(같은 지번·층·면적)는 계산에서 뺀다. 정답을 보고 답하는 것을 막는다.
   - 지번을 둘로 나눠 dev는 설정값을 고르는 데, test는 마지막 성적을 내는 데만 쓴다.
+  - 학습이 필요한 모델은 지번을 5묶음(fold)으로 나눠, 맞혀 볼 묶음의 홀드아웃 거래를 빼고 학습한다.
 """
 import sqlite3
 import zlib
@@ -18,6 +19,7 @@ DB_PATH = Path("data/trades.db")
 REF_DATE = "2026-10-06"  # 산출 기준일 = 과제 안내일
 HOLDOUT_MONTHS = 12
 SAME_UNIT_AREA_TOLERANCE = 0.5  # ㎡. 실거래가에는 호가 없어서 지번·층·면적이 같으면 같은 호로 본다.
+N_FOLDS = 5
 
 QUERY = """
 SELECT t.*, g.lat, g.lon
@@ -46,6 +48,7 @@ def add_holdout_columns(trades: pd.DataFrame, ref_date: str = REF_DATE) -> pd.Da
     trades["months_ago"] = days / 30.4375  # 기준일로부터 몇 개월 전 거래인지
     trades["lot"] = trades["sgg_cd"] + " " + trades["dong"] + " " + trades["jibun"]
     trades["split"] = trades["lot"].map(split_of)
+    trades["fold"] = trades["lot"].map(fold_of)
     trades["is_holdout"] = (trades["months_ago"] >= 0) & (trades["months_ago"] <= HOLDOUT_MONTHS)
     return trades
 
@@ -53,6 +56,11 @@ def add_holdout_columns(trades: pd.DataFrame, ref_date: str = REF_DATE) -> pd.Da
 def split_of(lot: str) -> str:
     """지번 이름으로 dev/test를 정한다. 같은 건물의 거래는 항상 같은 쪽에 들어가고, 실행할 때마다 결과가 같다."""
     return "dev" if zlib.crc32(lot.encode("utf-8")) % 2 == 0 else "test"
+
+
+def fold_of(lot: str) -> int:
+    """지번 이름으로 0~4 중 한 묶음을 정한다. dev/test와 같은 방식이라 실행할 때마다 같다."""
+    return zlib.crc32(lot.encode("utf-8")) % N_FOLDS
 
 
 def same_unit(region_trades: pd.DataFrame, position: int) -> np.ndarray:

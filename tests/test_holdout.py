@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from model.baseline import estimate_baseline
-from model.holdout import add_holdout_columns, error_summary, same_unit, split_of
+from model.holdout import N_FOLDS, add_holdout_columns, error_summary, fold_of, same_unit, split_of
 
 
 def make_trades(rows: list[dict]) -> pd.DataFrame:
@@ -33,6 +33,12 @@ def test_split_is_stable_and_same_for_one_lot():
     trades = make_trades([{"floor": 2}, {"floor": 4}, {"jibun": "1-1"}, {"jibun": "1-2"}, {"jibun": "1-3"}, {"jibun": "1-4"}])
     assert trades["split"].iloc[0] == trades["split"].iloc[1]
     assert set(trades["split"]) == {"dev", "test"}
+
+
+def test_fold_is_stable_and_within_range():
+    folds = {fold_of(f"11620 신림동 {n}-1") for n in range(200)}
+    assert folds == set(range(N_FOLDS))
+    assert fold_of("11620 신림동 598-178") == fold_of("11620 신림동 598-178")
 
 
 def test_same_unit_needs_same_lot_floor_and_area():
