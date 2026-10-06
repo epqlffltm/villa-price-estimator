@@ -5,3 +5,4 @@ __pycache__/
 .env
 data/raw/
 key.txt
+output.csv
