@@ -63,9 +63,14 @@ class ConfidenceModel:
         band = np.searchsorted(BAND_EDGES, np.atleast_1d(confidence), side="right")
         return np.asarray(self.half_widths)[band]
 
-    def assess(self, price: float, floor, build_year, weight_sum, spread) -> dict:
-        """추정가 한 건의 신뢰도와 가격 구간을 돌려준다."""
+    def assess(self, price: float, floor, build_year, weight_sum, spread, penalty: float = 1.0) -> dict:
+        """추정가 한 건의 신뢰도와 가격 구간을 돌려준다.
+
+        penalty: 면적·준공년도를 찾지 못해 어림값을 쓴 경우 신뢰도에 곱하는 값(1보다 작다).
+        이런 경우는 홀드아웃에 없어서 실제 비율로 맞추지 못했고, 낮추는 방향으로만 정한 규칙이다.
+        """
         confidence = float(self.confidence(confidence_features(floor, build_year, weight_sum, spread))[0])
+        confidence = max(MIN_CONFIDENCE, confidence * penalty)
         width = float(self.half_width(confidence)[0])
         return {
             "confidence": round(confidence, 2),

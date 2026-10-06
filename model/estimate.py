@@ -44,14 +44,28 @@ def fit_region(region_trades: pd.DataFrame, exclude: np.ndarray | None = None) -
     return RegionModel(region_trades, formula, residual, usable)
 
 
-def make_target(dong, lot, floor, area_m2, build_year, house_type="다세대", lat=None, lon=None) -> dict:
-    """추정 대상 한 건. 기준일에 중개거래로 팔린다고 가정한다."""
+def make_target(dong, lot, floor, area_m2, build_year, house_type="다세대", lat=None, lon=None,
+                area_is_guess=False) -> dict:
+    """추정 대상 한 건. 기준일에 중개거래로 팔린다고 가정한다.
+
+    area_is_guess: 전용면적을 찾지 못해 어림값을 넣었으면 True. 이때는 면적으로 같은 호를 가릴 수 없으므로
+    같은 건물·같은 층의 거래를 모두 같은 호로 보고 뺀다.
+    """
     return {
         "dong": dong, "lot": lot, "floor": int(floor), "area_m2": float(area_m2),
         "build_year": int(build_year), "house_type": house_type,
         "lat": None if lat is None or pd.isna(lat) else float(lat),
         "lon": None if lon is None or pd.isna(lon) else float(lon),
+        "area_is_guess": bool(area_is_guess),
     }
+
+
+def same_unit_as_target(trades: pd.DataFrame, target: dict) -> np.ndarray:
+    """대상과 같은 호로 보이는 거래를 True로 표시한다."""
+    same_floor = (trades["lot"].to_numpy() == target["lot"]) & (trades["floor"].to_numpy() == target["floor"])
+    if target.get("area_is_guess"):
+        return same_floor
+    return same_floor & (np.abs(trades["area_m2"].to_numpy() - target["area_m2"]) < SAME_UNIT_AREA_TOLERANCE)
 
 
 def target_from_trade(region_trades: pd.DataFrame, position: int) -> dict:
@@ -73,13 +87,8 @@ def distance_m(lat: float, lon: float, lats: np.ndarray, lons: np.ndarray) -> np
 def estimate(model: RegionModel, target: dict) -> dict:
     """대상 한 건의 시세와, 그 근거가 된 숫자를 돌려준다."""
     trades = model.trades
-    area = trades["area_m2"].to_numpy()
     same_building = trades["lot"].to_numpy() == target["lot"]
-    same_unit = (
-        same_building
-        & (trades["floor"].to_numpy() == target["floor"])
-        & (np.abs(area - target["area_m2"]) < SAME_UNIT_AREA_TOLERANCE)
-    )
+    same_unit = same_unit_as_target(trades, target)
 
     # 거리: 같은 건물은 0m. 좌표가 없으면 아주 먼 것으로 보아 반영하지 않는다.
     if target["lat"] is None:
