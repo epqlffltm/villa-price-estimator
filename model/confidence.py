@@ -122,6 +122,15 @@ def calibrate(dev: pd.DataFrame) -> ConfidenceModel:
     return model
 
 
+def interval_text(half_width: float) -> str:
+    """로그 단위 반폭을 "추정가 대비 -34% ~ +51%"처럼 읽을 수 있게 바꾼다.
+
+    구간은 추정가에 exp(-폭)과 exp(+폭)을 곱해 만든다. 곱하는 방식이라 아래쪽 폭과 위쪽 폭이 다르다.
+    (가격이 반이 되는 것과 두 배가 되는 것을 같은 크기의 변화로 본다.)
+    """
+    return f"{(np.exp(-half_width) - 1) * 100:+.0f}% ~ {(np.exp(half_width) - 1) * 100:+.0f}%"
+
+
 def reliability_table(holdout: pd.DataFrame, model: ConfidenceModel) -> pd.DataFrame:
     """신뢰도 구간별로 "말한 신뢰도"와 "실제로 맞힌 비율"을 나란히 놓는다."""
     holdout = with_errors(holdout)
@@ -139,7 +148,7 @@ def reliability_table(holdout: pd.DataFrame, model: ConfidenceModel) -> pd.DataF
             "평균 신뢰도": round(float(confidence[mask].mean()), 2),
             "실제 20%이내": round(float(holdout["맞힘"].to_numpy()[mask].mean()), 2),
             "중앙값오차율_%": round(float(np.median(holdout["오차율"].to_numpy()[mask])) * 100, 1),
-            "구간 폭_±%": round((np.exp(model.half_widths[k]) - 1) * 100, 0),
+            "가격 구간(추정가 대비)": interval_text(model.half_widths[k]),
             "구간 안에 든 비율": round(float(inside[mask].mean()), 2),
         })
     return pd.DataFrame(rows)
