@@ -1,6 +1,7 @@
 # uv를 쓰지 않을 때: pip install -r requirements.txt
-numpy>=2.5.3
-pandas>=3.0.6
-requests>=2.34.2
-scikit-learn>=1.9.1
-matplotlib>=3.9  # charts.py에서만 쓴다. predict.py 실행에는 필요 없다
+# Python 3.11, 3.12, 3.13에서 설치를 확인했다. 아래 최소 버전에서도 테스트와 출력이 같다.
+numpy>=1.26
+pandas>=2.1
+requests>=2.31
+scikit-learn>=1.3
+matplotlib>=3.8  # charts.py에서만 쓴다. predict.py 실행에는 필요 없다

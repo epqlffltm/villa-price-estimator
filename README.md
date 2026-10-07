@@ -9,17 +9,21 @@
 
 ## 실행
 
-Python 3.12 이상이 필요하다.
+라이브러리를 먼저 설치해야 한다. 설치하지 않고 실행하면 `ModuleNotFoundError: No module named 'pandas'`가 나온다.
 
 ```bash
-# uv를 쓰는 경우
-uv sync
-uv run python predict.py --input input.csv --output output.csv
-
-# pip를 쓰는 경우
+# pip를 쓰는 경우 (Python 3.11 이상)
 pip install -r requirements.txt
 python predict.py --input input.csv --output output.csv
+
+# uv를 쓰는 경우 (Python 3.12 이상을 uv가 알아서 준비한다)
+uv sync
+uv run python predict.py --input input.csv --output output.csv
 ```
+
+uv로 설치했다면 라이브러리는 `.venv` 안에 있다. `python predict.py`를 직접 치려면 가상환경을 먼저 켜거나(`.venv\Scripts\activate`, macOS·Linux는 `source .venv/bin/activate`) `uv run`을 앞에 붙인다.
+
+pip 설치는 Python 3.11, 3.12, 3.13에서 확인했다. 설치 목록의 최소 버전(numpy 1.26, pandas 2.1, scikit-learn 1.3)에서도 테스트 149개가 통과하고 출력 파일이 같다. Python 3.10 이하는 확인하지 않았다.
 
 예시 입력으로 바로 돌려 볼 수 있다. 20건 기준 몇 초 안에 끝난다.
 
