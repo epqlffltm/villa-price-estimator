@@ -111,6 +111,18 @@ def test_missing_area_is_read_from_the_building_register_by_ho():
     assert any(url.endswith("getBrExposPubuseAreaInfo") for url in session.urls)
 
 
+def test_dong_missing_from_the_register_lowers_confidence_and_says_so():
+    """대장에 A동만 있는데 B동 202를 넣으면, 결과는 내되 근거에 동 불일치를 남기고 신뢰도를 낮춘다."""
+    items = [{"hoNm": "201호", "dongNm": "A동", "flrNo": 2, "flrGbCd": "20", "exposPubuseGbCd": "1", "area": 40.0},
+             {"hoNm": "202호", "dongNm": "A동", "flrNo": 2, "flrGbCd": "20", "exposPubuseGbCd": "1", "area": 80.0}]
+    right = predict([row(area_m2="", ho="A동 202")], make_resolver(FakeRegister(area_items=items), data_key="KEY"), CONFIDENCE)[0]
+    wrong = predict([row(area_m2="", ho="B동 202")], make_resolver(FakeRegister(area_items=items), data_key="KEY"), CONFIDENCE)[0]
+    assert right["status"] == wrong["status"] == "ok"
+    assert "입력한 동(B)이 대장에 없어" in wrong["basis"]
+    assert "대장에 없어" not in right["basis"]
+    assert wrong["confidence"] < right["confidence"]
+
+
 def test_missing_area_without_register_uses_same_floor_trades():
     with_area = predict([row()], make_resolver(), CONFIDENCE)[0]
     without_area = predict([row(area_m2="")], make_resolver(), CONFIDENCE)[0]

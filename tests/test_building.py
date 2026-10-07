@@ -188,3 +188,33 @@ def test_same_area_in_every_building_is_not_a_guess():
     items = [in_dong("A동", "301", 3, 30.0), in_dong("B동", "301", 3, 30.0)]
     area, how = find_unit_area(items, floor=3, ho="301")
     assert area == 30.0 and not is_guess(how)
+
+
+ONLY_A = [in_dong("A동", "201", 2, 45.58), in_dong("A동", "202", 2, 29.99)]
+
+
+@pytest.mark.parametrize("ho", ["B동 201", "B동201호", "B-201", "B 201"])
+def test_dong_that_is_not_in_the_register_is_not_an_exact_match(ho):
+    """대장에 A동만 있는데 B동 201을 넣으면, A동 201호의 면적을 쓰더라도 확정으로 치지 않는다."""
+    area, how = find_unit_area(ONLY_A, floor=2, ho=ho)
+    assert area == 45.58 and is_guess(how)
+    assert "입력한 동(B)이 대장에 없어" in how
+
+
+def test_ho_without_a_dong_in_a_one_building_register_is_exact():
+    assert find_unit_area(ONLY_A, floor=2, ho="201") == (45.58, "건축물대장 A동 201")
+    assert find_unit_area(ONLY_A, floor=2, ho="A동 201") == (45.58, "건축물대장 A동 201")
+
+
+def test_dong_cannot_be_checked_when_the_register_has_no_dong_names():
+    """건물이 하나라 대장에 동 이름이 없으면, 입력에 적힌 동은 확인할 길이 없다. 호 이름으로 찾은 것을 그대로 쓴다."""
+    area, how = find_unit_area(ITEMS, floor=3, ho="가동 301")
+    assert area == 29.09 and not is_guess(how)
+    assert find_unit_area(ITEMS, floor=3, ho="102-302")[0] == 31.20
+
+
+def test_ho_name_with_a_dash_wins_over_reading_it_as_a_dong():
+    """동 이름이 있는 대장에서도, "201-2"라는 호가 그대로 있으면 201동 2호로 읽지 않는다."""
+    items = [in_dong("A동", "201-1호", 2, 33.0), in_dong("A동", "201-2호", 2, 35.0), in_dong("A동", "2호", 2, 99.0)]
+    area, how = find_unit_area(items, floor=2, ho="201-2")
+    assert area == 35.0 and not is_guess(how)
