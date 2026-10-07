@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>빌라 시세 산출 과정</title>
+<!--
+  PPT용 설명 슬라이드 7장 (16:9).
+  - 화면에서 열면 7장이 세로로 이어진다.
+  - ?slide=N 을 붙이면 N번째 장만 1920×1080으로 보여 준다 (PNG 캡처용).
+  - 인쇄(PDF)하면 1920×1080 한 장에 슬라이드 한 장씩 들어간다.
+  숫자 출처: README.md, reports/predict_check.csv, model/confidence.json,
+             화곡동 예시는 data/trades.db로 predict 경로를 다시 돌려 확인 (2026-10-07).
+-->
+<style>
+  :root {
+    --ink: #161a22;
+    --muted: #586070;
+    --faint: #8a91a0;
+    --line: #d9dee7;
+    --soft: #f3f5f9;
+    --accent: #2457d6;
+    --accent-soft: #e7eefd;
+    --said: #d97a1f;
+    --bad: #b42318;
+    --bad-soft: #fdecea;
+    --ok: #157f3c;
+    --ok-soft: #e3f4e9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #ffffff; color: var(--ink); }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    padding: 24px 16px 48px;
+    display: flex; flex-direction: column; align-items: center; gap: 32px;
+    word-break: keep-all; overflow-wrap: break-word;
+  }
+  .hint { font-size: 14px; color: var(--muted); text-align: center; }
+
+  /* 16:9 슬라이드. 모든 크기는 슬라이드 너비 기준(cqw). 1920px 너비에서 1cqw = 19.2px */
+  .slide {
+    width: min(100%, 1600px);
+    aspect-ratio: 16 / 9;
+    container-type: inline-size;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    position: relative;
+    overflow: hidden;
+  }
+  .inner {
+    position: absolute; inset: 0;
+    padding: 3.1cqw 4.4cqw 2.2cqw;
+    display: flex; flex-direction: column; gap: 1.6cqw;
+  }
+
+  /* 머리: 단계 번호 + 핵심 메시지 */
+  .top { display: flex; flex-direction: column; gap: .8cqw; }
+  .kick { display: flex; align-items: center; gap: 1cqw; font-size: 1.35cqw; font-weight: 700; color: var(--accent); }
+  .kick .no {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.6cqw; height: 2.6cqw; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 1.4cqw; font-weight: 800;
+  }
+  .kick .date { margin-left: auto; color: var(--muted); font-weight: 700; }
+  h1, h2 { font-weight: 800; line-height: 1.3; letter-spacing: -.01em; }
+  h1 { font-size: 3.3cqw; }
+  h2 { font-size: 2.85cqw; }
+  h1 em, h2 em { font-style: normal; color: var(--accent); }
+
+  /* 가운데 그림 */
+  .fig { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+
+  /* 아래 보조 문구 */
+  .foot { display: flex; flex-direction: column; gap: .5cqw; }
+  .notes { display: flex; flex-direction: column; gap: .25cqw; font-size: 1.12cqw; line-height: 1.5; color: var(--muted); }
+  .notes b { color: var(--ink); font-weight: 700; }
+  .src { font-size: .95cqw; color: var(--faint); font-family: Consolas, "D2Coding", monospace; }
+
+  /* 숫자 종류 표시: 실측 / 예시 산출값 / 설명용 */
+  .tag {
+    display: inline-block; font-size: 1.05cqw; font-weight: 700; line-height: 1.4;
+    border-radius: .45cqw; padding: .1cqw .6cqw; white-space: nowrap; vertical-align: middle;
+  }
+  .tag.m { background: var(--ok-soft); color: var(--ok); }
+  .tag.e { background: var(--accent-soft); color: var(--accent); }
+  .tag.i { background: #fff; color: var(--muted); border: .1cqw dashed var(--faint); }
+  .legend { display: flex; gap: 1.6cqw; align-items: center; font-size: 1.05cqw; color: var(--muted); flex-wrap: wrap; }
+  .legend span.item { display: inline-flex; align-items: center; gap: .5cqw; }
+
+  /* ── 0. 전체 흐름 ── */
+  .flow { display: flex; align-items: stretch; }
+  .flow .card {
+    flex: 1; border: .15cqw solid var(--line); border-radius: 1.1cqw;
+    padding: 1.3cqw 1.2cqw; display: flex; flex-direction: column; gap: .5cqw; background: #fff;
+  }
+  .flow .card .n { font-size: 1.2cqw; font-weight: 800; color: var(--accent); }
+  .flow .card .t { font-size: 1.75cqw; font-weight: 800; line-height: 1.25; }
+  .flow .card .d { font-size: 1.25cqw; color: var(--muted); line-height: 1.4; }
+  .flow .card.end { background: var(--accent-soft); border-color: var(--accent); }
+  .flow .ar { flex: none; width: 2.2cqw; display: flex; align-items: center; justify-content: center; }
+  .flow .ar svg { width: 1.6cqw; height: 1.6cqw; display: block; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr 2.1fr; gap: 1.2cqw; margin-top: 1.6cqw; }
+  .fact { background: var(--soft); border-radius: 1cqw; padding: 1.1cqw 1.4cqw; display: flex; flex-direction: column; gap: .35cqw; justify-content: center; }
+  .fact .k { font-size: 1.15cqw; color: var(--muted); }
+  .fact .v { font-size: 1.85cqw; font-weight: 800; line-height: 1.3; }
+  .perf { background: #fff; border: .18cqw solid var(--ok); border-radius: 1cqw; padding: 1cqw 1.6cqw; display: flex; flex-direction: column; gap: .4cqw; }
+  .perf .k { font-size: 1.15cqw; color: var(--muted); display: flex; align-items: center; gap: .6cqw; flex-wrap: wrap; }
+  .perf .nums { display: flex; gap: 3cqw; align-items: baseline; }
+  .perf .num { display: flex; flex-direction: column; gap: .2cqw; }
+  .perf .num b { font-size: 3.3cqw; font-weight: 800; color: var(--ink); line-height: 1.1; }
+  .perf .num span { font-size: 1.4cqw; color: var(--ink); font-weight: 700; white-space: nowrap; }
+
+  /* ── 1. 입력 ── */
+  .csv { width: 100%; border-collapse: separate; border-spacing: .5cqw 0; table-layout: fixed; }
+  .csv th, .csv td { text-align: center; }
+  .csv .col { font-family: Consolas, "D2Coding", monospace; font-size: 1.55cqw; font-weight: 700; padding: .9cqw .3cqw .3cqw; border-radius: 1cqw 1cqw 0 0; }
+  .csv .ko { font-size: 1.55cqw; font-weight: 700; padding: .1cqw .3cqw .5cqw; }
+  .csv .bd { padding: 0 .3cqw .9cqw; }
+  .csv .val { font-size: 1.9cqw; font-weight: 800; padding: 1.2cqw .3cqw; border-radius: 0 0 1cqw 1cqw; border-top: .15cqw solid var(--line); }
+  .csv .req { background: var(--accent-soft); }
+  .csv .opt { background: var(--soft); }
+  .csv .val.empty { color: var(--faint); font-weight: 600; font-size: 1.5cqw; }
+  .badge { display: inline-block; font-size: 1.15cqw; font-weight: 700; border-radius: .5cqw; padding: .15cqw .7cqw; }
+  .badge.req { background: var(--accent); color: #fff; }
+  .badge.opt { background: #fff; color: var(--muted); border: .1cqw solid var(--line); }
+  .rowtag { display: flex; justify-content: space-between; align-items: center; margin-bottom: .8cqw; font-size: 1.25cqw; color: var(--muted); }
+  .callouts { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 1.2cqw; margin-top: 1.6cqw; }
+  .callout { border-left: .45cqw solid var(--accent); padding: .5cqw 0 .5cqw 1.2cqw; font-size: 1.45cqw; line-height: 1.45; }
+  .callout b { font-weight: 800; }
+  .callout code { font-family: Consolas, "D2Coding", monospace; font-size: 1.35cqw; }
+
+  /* ── 2. 빈 칸 채우기 ── */
+  .steps { display: flex; align-items: stretch; }
+  .step { flex: 1; border: .15cqw solid var(--line); border-radius: 1cqw; padding: 1.1cqw 1.1cqw; display: flex; flex-direction: column; gap: .5cqw; background: #fff; }
+  .step .n { font-size: 1.15cqw; font-weight: 800; color: var(--muted); }
+  .step .t { font-size: 1.6cqw; font-weight: 800; line-height: 1.3; }
+  .step .r { font-size: 1.2cqw; line-height: 1.4; color: var(--muted); }
+  .step .p { margin-top: auto; font-size: 1.25cqw; font-weight: 700; line-height: 1.35; }
+  .step .p.sure { color: var(--ok); }
+  .step .p.guess { color: var(--bad); }
+  .step.hit { border-color: var(--accent); border-width: .3cqw; background: var(--accent-soft); }
+  .steps .ar { flex: none; width: 1.9cqw; display: flex; align-items: center; justify-content: center; }
+  .steps .ar svg { width: 1.3cqw; height: 1.3cqw; display: block; }
+  .rowhead { display: flex; align-items: center; gap: 1cqw; font-size: 1.55cqw; font-weight: 800; margin-bottom: .8cqw; }
+  .mini { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2cqw; margin-top: 1.5cqw; }
+  .chainbox { background: var(--soft); border-radius: 1cqw; padding: 1cqw 1.3cqw; }
+  .chainbox .h { font-size: 1.4cqw; font-weight: 800; margin-bottom: .6cqw; }
+  .chain { display: flex; align-items: center; gap: .45cqw; flex-wrap: wrap; font-size: 1.3cqw; }
+  .pill { border-radius: 2cqw; padding: .3cqw .9cqw; background: #fff; border: .1cqw solid var(--line); white-space: nowrap; }
+  .pill.hit { border: .2cqw solid var(--accent); color: var(--accent); font-weight: 800; }
+  .pill.guess { color: var(--bad); }
+  .chain .to { color: var(--faint); }
+
+  /* ── 3. 비교 거래 ── */
+  .three { display: grid; grid-template-columns: .95fr 1.2fr 1fr; gap: 2cqw; align-items: stretch; height: 100%; }
+  .weights { display: flex; flex-direction: column; gap: 1cqw; justify-content: center; }
+  .w { display: flex; align-items: center; gap: 1.2cqw; border: .15cqw solid var(--line); border-radius: 1cqw; padding: .9cqw 1.1cqw; }
+  .w svg { width: 5.2cqw; height: 4.2cqw; flex: none; display: block; }
+  .w .t { font-size: 1.65cqw; font-weight: 800; line-height: 1.25; }
+  .w .d { font-size: 1.25cqw; color: var(--muted); line-height: 1.4; margin-top: .2cqw; }
+  .bldg { display: flex; flex-direction: column; justify-content: center; gap: .6cqw; }
+  .bldg svg { width: 100%; height: auto; display: block; }
+  .bldg .cap { display: flex; justify-content: space-between; align-items: center; font-size: 1.2cqw; color: var(--muted); }
+  .rules { display: flex; flex-direction: column; justify-content: center; gap: 1cqw; }
+  .rules .h { font-size: 1.7cqw; font-weight: 800; color: var(--bad); }
+  .rule { border-radius: 1cqw; padding: 1.1cqw 1.3cqw; background: var(--bad-soft); }
+  .rule .when { font-size: 1.25cqw; font-weight: 700; color: var(--muted); }
+  .rule .what { font-size: 1.6cqw; font-weight: 800; line-height: 1.35; margin-top: .3cqw; }
+  .rule.new { border: .2cqw solid var(--bad); }
+  .rules .why { font-size: 1.3cqw; line-height: 1.45; color: var(--ink); }
+
+  /* ── 4. 가격 계산 ── */
+  .two { display: grid; grid-template-columns: 1.15fr 1fr; gap: 2.6cqw; align-items: center; height: 100%; }
+  .two svg { width: 100%; height: auto; display: block; }
+  .figcap { display: flex; justify-content: space-between; align-items: center; font-size: 1.2cqw; color: var(--muted); margin-bottom: .6cqw; }
+  .formula { display: flex; flex-direction: column; gap: .7cqw; }
+  .formula .term { display: flex; align-items: center; gap: 1cqw; }
+  .formula .op { width: 2.6cqw; flex: none; text-align: center; font-size: 2cqw; font-weight: 800; color: var(--muted); }
+  .formula .box { flex: 1; border: .15cqw solid var(--line); border-radius: 1cqw; padding: .8cqw 1.2cqw; }
+  .formula .box .t { font-size: 1.6cqw; font-weight: 800; }
+  .formula .box .d { font-size: 1.2cqw; color: var(--muted); line-height: 1.4; margin-top: .15cqw; }
+  .formula .box.res { background: var(--accent-soft); border-color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: .5cqw; margin-top: .5cqw; }
+  .chip { font-size: 1.15cqw; padding: .25cqw .7cqw; border-radius: .5cqw; background: var(--soft); }
+
+  /* ── 5. 신뢰도 ── */
+  .conf { display: grid; grid-template-columns: 1.55fr 1fr; gap: 2.4cqw; align-items: center; height: 100%; }
+  .conf svg { width: 100%; height: auto; display: block; }
+  .side { display: flex; flex-direction: column; gap: 1.1cqw; }
+  .warnbox { border: .2cqw solid var(--bad); border-radius: 1cqw; padding: 1.1cqw 1.3cqw; font-size: 1.45cqw; line-height: 1.5; }
+  .warnbox b { color: var(--bad); }
+  .factors { display: grid; grid-template-columns: 1fr; gap: .5cqw; }
+  .factor { display: flex; gap: .8cqw; align-items: baseline; font-size: 1.3cqw; line-height: 1.35; padding: .55cqw .9cqw; border-radius: .7cqw; background: var(--soft); }
+  .factor .s { font-weight: 800; flex: none; }
+  .factor .s.up { color: var(--ok); }
+  .factor .s.down { color: var(--bad); }
+  .side .h { font-size: 1.35cqw; font-weight: 800; color: var(--muted); }
+
+  /* ── 6. 결과 ── */
+  .out { display: grid; grid-template-columns: 1.35fr 1fr; gap: 2.4cqw; align-items: center; height: 100%; }
+  .result { border: .2cqw solid var(--accent); border-radius: 1.2cqw; overflow: hidden; }
+  .result .head { background: var(--accent); color: #fff; padding: 1cqw 1.6cqw; }
+  .result .head .k { font-size: 1.2cqw; opacity: .9; }
+  .result .head .v { font-size: 3cqw; font-weight: 800; line-height: 1.2; }
+  .result .band { padding: .9cqw 1.6cqw .3cqw; }
+  .result .band svg { width: 100%; height: auto; display: block; }
+  .result .rows { display: grid; grid-template-columns: auto 1fr; }
+  .result .rows div { padding: .7cqw 1.6cqw; border-top: .1cqw solid var(--line); font-size: 1.35cqw; line-height: 1.45; }
+  .result .rows .k { color: var(--muted); font-size: 1.2cqw; white-space: nowrap; }
+  .result .rows .v b { font-weight: 800; }
+  .bandnote { border-left: .45cqw solid var(--accent); padding: .4cqw 0 .4cqw 1.2cqw; font-size: 1.5cqw; line-height: 1.5; }
+  .bandnote b { font-weight: 800; }
+  table.bands { width: 100%; border-collapse: collapse; font-size: 1.3cqw; margin-top: 1cqw; }
+  table.bands th, table.bands td { padding: .45cqw .8cqw; border-bottom: .1cqw solid var(--line); text-align: left; }
+  table.bands th { color: var(--muted); font-weight: 700; font-size: 1.1cqw; }
+  table.bands td.n { font-variant-numeric: tabular-nums; font-weight: 700; }
+  table.bands tr.hit td { background: var(--accent-soft); }
+
+  /* PNG 캡처: ?slide=N */
+  html.render body { padding: 0; gap: 0; display: block; }
+  html.render .hint { display: none; }
+  html.render .slide { width: 1920px; height: 1080px; aspect-ratio: auto; border: none; }
+
+  @media print {
+    @page { size: 1920px 1080px; margin: 0; }
+    body { padding: 0; gap: 0; display: block; }
+    .hint { display: none; }
+    .slide { width: 1920px; height: 1080px; aspect-ratio: auto; border: none; break-after: page; break-inside: avoid; }
+    .slide:last-of-type { break-after: auto; }
+  }
+</style>
+</head>
+<body>
+
+<p class="hint">슬라이드 7장 · 16:9 · 주소 뒤에 ?slide=1 ~ ?slide=7 을 붙이면 한 장씩 1920×1080으로 보입니다.</p>
+
+<!-- 1장. 전체 흐름 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick">villa-price-estimator · 빌라 시세 추정<span class="date">산출 기준일 2026-10-06</span></div>
+      <h1>주소와 층을 넣으면, <em>주변 실거래</em>를 근거로 시세를 계산합니다</h1>
+    </div>
+
+    <div class="fig">
+      <div class="flow">
+        <div class="card"><div class="n">1</div><div class="t">입력</div><div class="d">주소·층<br>(호·면적은 선택)</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#2457d6"/></svg></div>
+        <div class="card"><div class="n">2</div><div class="t">빈 칸 채우기</div><div class="d">면적·준공년도·위치를 차례로 찾음</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#2457d6"/></svg></div>
+        <div class="card"><div class="n">3</div><div class="t">비교 거래 고르기</div><div class="d">가깝고 최근인 거래일수록 크게</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#2457d6"/></svg></div>
+        <div class="card"><div class="n">4</div><div class="t">가격 계산</div><div class="d">가격식 값을 주변 실거래로 보정</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#2457d6"/></svg></div>
+        <div class="card"><div class="n">5</div><div class="t">신뢰도</div><div class="d">±20% 안에 들 것으로 추정한 확률</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#2457d6"/></svg></div>
+        <div class="card end"><div class="n">6</div><div class="t">결과</div><div class="d">시세·가격 구간·신뢰도·근거</div></div>
+      </div>
+
+      <div class="facts">
+        <div class="fact"><div class="k">다루는 지역</div><div class="v">강남구 · 관악구<br>강서구 화곡동</div></div>
+        <div class="fact"><div class="k">근거 데이터 (2021.10 ~ 2026.10 계약)</div><div class="v">실거래 21,220건</div></div>
+        <div class="perf">
+          <div class="k"><span class="tag m">실측</span>test 홀드아웃 거래 2,381건 · predict 실행 경로 · 면적 입력</div>
+          <div class="nums">
+            <div class="num"><b>10.6%</b><span>중앙값 오차율</span></div>
+            <div class="num"><b>76.1%</b><span>실제 거래가 ±20% 이내</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div><b>test 홀드아웃</b> = 기준일 전 12개월 거래 4,860건을 지번 기준으로 반씩 나눠, 설정값을 고르는 데 쓰지 않은 쪽(2,381건). 위 수치는 제출 프로그램(predict)에 입력 한 줄씩 넣어 잰 값이며 실패 0건.</div>
+        <div><b>별도 검증</b> validate.py(설정값을 고를 때 쓴 방식, 같은 2,381건): 중앙값 오차율 10.6%, ±20% 이내 76.4%. · 중앙값 오차율 10.6% = 절반의 물건은 오차가 10.6% 이하였다는 뜻.</div>
+      </div>
+      <div class="legend">
+        <span class="item"><span class="tag m">실측</span>검증에서 잰 값</span>
+        <span class="item"><span class="tag e">예시 산출값</span>화곡동 예시를 코드·DB로 다시 계산한 값</span>
+        <span class="item"><span class="tag i">설명용</span>이해를 돕는 그림 (실제 데이터 아님)</span>
+      </div>
+      <div class="src">README.md「제출 프로그램을 그대로 돌린 검증」· validate_predict.py · reports/predict_check.csv · model/holdout.py REF_DATE</div>
+    </div>
+  </div>
+</section>
+
+<!-- 2장. 입력 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">1</span>입력</div>
+      <h2>CSV 한 줄이 집 한 채입니다. <em>주소와 층</em>만 있으면 계산합니다</h2>
+    </div>
+
+    <div class="fig">
+      <div class="rowtag"><span>입력 파일 input.csv의 컬럼과 한 줄 예시</span><span><span class="tag e">예시 입력</span> examples/input.csv 3번 줄</span></div>
+      <table class="csv">
+        <colgroup><col style="width:8%"><col style="width:22%"><col style="width:12%"><col style="width:13%"><col style="width:10%"><col style="width:16%"><col style="width:19%"></colgroup>
+        <tr>
+          <th class="col req">id</th><th class="col req">sigungu</th><th class="col req">dong</th><th class="col req">jibun</th><th class="col req">floor</th><th class="col opt">ho</th><th class="col opt">area_m2</th>
+        </tr>
+        <tr>
+          <td class="ko req">식별자</td><td class="ko req">시군구</td><td class="ko req">법정동</td><td class="ko req">지번</td><td class="ko req">층</td><td class="ko opt">호</td><td class="ko opt">전용면적(㎡)</td>
+        </tr>
+        <tr>
+          <td class="bd req"><span class="badge req">필수</span></td><td class="bd req"><span class="badge req">필수</span></td><td class="bd req"><span class="badge req">필수</span></td><td class="bd req"><span class="badge req">필수</span></td><td class="bd req"><span class="badge req">필수</span></td><td class="bd opt"><span class="badge opt">비워도 됨</span></td><td class="bd opt"><span class="badge opt">비워도 됨</span></td>
+        </tr>
+        <tr>
+          <td class="val req">3</td><td class="val req">서울특별시 강서구</td><td class="val req">화곡동</td><td class="val req">42-88</td><td class="val req">4</td><td class="val opt empty">(빈칸)</td><td class="val opt">29.87</td>
+        </tr>
+      </table>
+
+      <div class="callouts">
+        <div class="callout"><b>id도 필수 컬럼</b>입니다. 계산에는 쓰지 않고, 결과 줄에 그대로 옮겨 적어 입력과 짝짓습니다.</div>
+        <div class="callout"><b>층</b>: 지하는 <code>-1</code> 또는 <code>B1</code></div>
+        <div class="callout"><b>호</b>: <code>201</code>, <code>B동 201</code>, <code>102-402</code>처럼 동을 함께 적어도 됨</div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div><b>필수 컬럼</b>(id·sigungu·dong·jibun·floor)이 하나라도 없으면 파일을 읽지 않고 멈춥니다. 컬럼은 있는데 주소·층 값을 읽을 수 없으면 그 줄만 <b>fail</b>로 남기고 다음 줄로 넘어갑니다.</div>
+        <div>여러 줄을 넣어도 물건마다 따로 계산하므로, 같은 물건은 다른 줄과 상관없이 같은 값이 나옵니다.</div>
+      </div>
+      <div class="src">predict.py read_input() — 필수 컬럼 ["id", "sigungu", "dong", "jibun", "floor"] · README.md 입력 표</div>
+    </div>
+  </div>
+</section>
+
+<!-- 3장. 빈 칸 채우기 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">2</span>빈 칸 채우기</div>
+      <h2>모르는 값은 <em>믿을 만한 곳부터</em> 차례로 찾고, 어림할수록 신뢰도를 깎습니다</h2>
+    </div>
+
+    <div class="fig">
+      <div class="rowhead">전용면적을 찾는 순서 <span class="tag e">예시 산출값</span><span style="font-size:1.25cqw;font-weight:500;color:var(--muted)">화곡동 예시는 29.87㎡를 입력해서 ①에서 끝남</span></div>
+      <div class="steps">
+        <div class="step hit"><div class="n">①</div><div class="t">입력값</div><div class="r">area_m2에 적은 값</div><div class="p sure">확인값</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#8a91a0"/></svg></div>
+        <div class="step"><div class="n">②</div><div class="t">건축물대장</div><div class="r">API 키가 있을 때 · 호로 찾음</div><div class="p sure">호를 특정: 확인값</div><div class="p guess" style="margin-top:0">못 하면 어림 ×0.9</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#8a91a0"/></svg></div>
+        <div class="step"><div class="n">③</div><div class="t">같은 건물·같은 층 실거래</div><div class="r">수집해 둔 DB</div><div class="p sure">면적이 하나: 확인값</div><div class="p guess" style="margin-top:0">여럿이면 어림 ×0.8</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#8a91a0"/></svg></div>
+        <div class="step"><div class="n">④</div><div class="t">같은 건물 실거래 중앙값</div><div class="r">층이 다른 거래까지</div><div class="p guess">어림 ×0.7</div></div>
+        <div class="ar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2 L13 8 L3 14 Z" fill="#8a91a0"/></svg></div>
+        <div class="step"><div class="n">⑤</div><div class="t">동 중앙값</div><div class="r">건물 기록이 없을 때</div><div class="p guess">어림 ×0.5</div></div>
+      </div>
+
+      <div class="mini">
+        <div class="chainbox"><div class="h">준공년도</div>
+          <div class="chain"><span class="pill hit">같은 지번 실거래</span><span class="to">→</span><span class="pill">건축물대장</span><span class="to">→</span><span class="pill guess">주변 중앙값 (어림 ×0.8)</span></div>
+        </div>
+        <div class="chainbox"><div class="h">위치(좌표)</div>
+          <div class="chain"><span class="pill hit">수집해 둔 좌표</span><span class="to">→</span><span class="pill">카카오 주소 검색</span><span class="to">→</span><span class="pill guess">없으면 같은 건물만 비교</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div>파란 테두리 = 화곡동 예시가 실제로 쓴 경로(준공 2012년, 수집 좌표). <b>×0.9 등은 신뢰도에 곱하는 값</b>이며, 검증 자료에 없는 경우라 낮추는 방향으로만 정한 규칙입니다. 어떻게 채웠는지는 결과의 근거(basis) 문장에 적힙니다.</div>
+        <div><b>계산하지 않는 경우(fail)</b>: 지역 밖 주소 · 읽을 수 없는 지번·층 · 실거래·좌표·건축물대장 어디에도 없는 지번. 건축물대장·카카오 조회는 API 키가 있을 때만 하며, 키가 없어도 수집해 둔 DB로 동작합니다.</div>
+      </div>
+      <div class="src">model/resolve.py Resolver._area() · _build_year() · _locate() · model/confidence.py assess(penalty)</div>
+    </div>
+  </div>
+</section>
+
+<!-- 4장. 비교 거래 고르기 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">3</span>비교 거래 고르기</div>
+      <h2>가깝고 최근인 거래를 크게 참고하되, <em>이 집 자신의 거래는 뺍니다</em></h2>
+    </div>
+
+    <div class="fig">
+      <div class="three">
+        <div class="weights">
+          <div class="w">
+            <svg viewBox="0 0 100 80" aria-hidden="true">
+              <circle cx="50" cy="40" r="34" fill="none" stroke="#d9dee7" stroke-width="2"/>
+              <circle cx="50" cy="40" r="17" fill="none" stroke="#2457d6" stroke-width="2" stroke-dasharray="4 3"/>
+              <circle cx="50" cy="40" r="6" fill="#2457d6"/>
+              <circle cx="61" cy="33" r="4.5" fill="#161a22"/>
+              <circle cx="80" cy="62" r="4.5" fill="#161a22" opacity=".3"/>
+              <circle cx="20" cy="22" r="4.5" fill="#161a22" opacity=".3"/>
+            </svg>
+            <div><div class="t">가까울수록</div><div class="d">50m 멀어질 때마다<br>약 1/2.7로 줄임</div></div>
+          </div>
+          <div class="w">
+            <svg viewBox="0 0 100 80" aria-hidden="true">
+              <line x1="4" y1="66" x2="96" y2="66" stroke="#d9dee7" stroke-width="2"/>
+              <rect x="74" y="12" width="16" height="54" rx="2" fill="#2457d6"/>
+              <rect x="52" y="30" width="16" height="36" rx="2" fill="#2457d6" opacity=".6"/>
+              <rect x="30" y="44" width="16" height="22" rx="2" fill="#2457d6" opacity=".35"/>
+              <rect x="8" y="54" width="16" height="12" rx="2" fill="#2457d6" opacity=".2"/>
+            </svg>
+            <div><div class="t">최근일수록</div><div class="d">24개월 오래될 때마다<br>약 1/2.7로 줄임</div></div>
+          </div>
+          <div class="w">
+            <svg viewBox="0 0 100 80" aria-hidden="true">
+              <rect x="6" y="8" width="44" height="64" rx="3" fill="#e7eefd" stroke="#2457d6" stroke-width="2"/>
+              <g fill="#2457d6">
+                <rect x="14" y="16" width="10" height="9"/><rect x="32" y="16" width="10" height="9"/>
+                <rect x="14" y="32" width="10" height="9"/><rect x="32" y="32" width="10" height="9"/>
+                <rect x="14" y="48" width="10" height="9"/><rect x="32" y="48" width="10" height="9"/>
+              </g>
+              <text x="54" y="48" font-size="19" font-weight="800" fill="#2457d6" font-family="Noto Sans KR, Malgun Gothic, sans-serif">×10</text>
+            </svg>
+            <div><div class="t">같은 건물이면</div><div class="d">10배로 반영</div></div>
+          </div>
+        </div>
+
+        <div class="bldg">
+          <div class="cap"><span>화곡동 42-88 같은 건물 거래 4건</span><span class="tag e">예시 산출값</span></div>
+          <svg viewBox="0 0 560 440" role="img" aria-label="화곡동 42-88 건물의 거래 4건 중 4층 거래 1건을 같은 호로 보고 제외하고 3층 거래 3건을 반영">
+            <g font-family="Noto Sans KR, Malgun Gothic, sans-serif">
+              <!-- 건물 -->
+              <rect x="110" y="20" width="330" height="400" rx="8" fill="#f3f5f9" stroke="#586070" stroke-width="2"/>
+              <line x1="110" y1="120" x2="440" y2="120" stroke="#d9dee7" stroke-width="2"/>
+              <line x1="110" y1="250" x2="440" y2="250" stroke="#d9dee7" stroke-width="2"/>
+              <line x1="110" y1="335" x2="440" y2="335" stroke="#d9dee7" stroke-width="2"/>
+              <text x="96" y="78" text-anchor="end" font-size="26" font-weight="800" fill="#161a22">4층</text>
+              <text x="96" y="192" text-anchor="end" font-size="26" font-weight="800" fill="#161a22">3층</text>
+              <text x="96" y="300" text-anchor="end" font-size="22" fill="#8a91a0">2층</text>
+              <text x="96" y="385" text-anchor="end" font-size="22" fill="#8a91a0">1층</text>
+              <!-- 4층: 같은 호로 보고 제외 -->
+              <rect x="130" y="40" width="290" height="62" rx="10" fill="#fdecea" stroke="#b42318" stroke-width="2.5" stroke-dasharray="7 5"/>
+              <text x="275" y="70" text-anchor="middle" font-size="24" font-weight="800" fill="#b42318">2026-05 · 29.87㎡</text>
+              <text x="275" y="94" text-anchor="middle" font-size="19" fill="#b42318">예시와 같은 호로 보고 제외</text>
+              <!-- 3층: 반영 -->
+              <rect x="130" y="134" width="290" height="32" rx="8" fill="#ffffff" stroke="#2457d6" stroke-width="2"/>
+              <text x="275" y="157" text-anchor="middle" font-size="20" font-weight="700" fill="#161a22">2021-10 · 29.87㎡ · 반영</text>
+              <rect x="130" y="174" width="290" height="32" rx="8" fill="#ffffff" stroke="#2457d6" stroke-width="2"/>
+              <text x="275" y="197" text-anchor="middle" font-size="20" font-weight="700" fill="#161a22">2022-07 · 29.92㎡ · 반영</text>
+              <rect x="130" y="214" width="290" height="32" rx="8" fill="#ffffff" stroke="#2457d6" stroke-width="2"/>
+              <text x="275" y="237" text-anchor="middle" font-size="20" font-weight="700" fill="#161a22">2026-04 · 29.87㎡ · 반영</text>
+              <text x="275" y="300" text-anchor="middle" font-size="20" fill="#8a91a0">거래 없음</text>
+              <text x="275" y="385" text-anchor="middle" font-size="20" fill="#8a91a0">거래 없음</text>
+              <!-- 오른쪽: 결과 -->
+              <text x="456" y="182" font-size="24" font-weight="800" fill="#2457d6">3건</text>
+              <text x="456" y="208" font-size="19" fill="#586070">반영</text>
+              <text x="456" y="66" font-size="24" font-weight="800" fill="#b42318">1건</text>
+              <text x="456" y="92" font-size="19" fill="#586070">제외</text>
+            </g>
+          </svg>
+          <div class="cap"><span>+ 반경 100m 안 다른 건물 거래 <b style="color:var(--ink)">51건</b>도 반영</span></div>
+        </div>
+
+        <div class="rules">
+          <div class="h">같은 호로 보고 빼는 거래</div>
+          <div class="rule"><div class="when">면적을 확인했을 때</div><div class="what">같은 지번 · 같은 층 ·<br>면적 차 0.5㎡ 미만</div></div>
+          <div class="rule new"><div class="when">면적이 어림값일 때</div><div class="what">같은 지번 · 같은 층<br>거래를 모두</div></div>
+          <div class="why">정답 거래를 보고 맞히지 않도록, <b>가격식 학습과 보정 양쪽</b>에서 뺍니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div>실거래 자료에는 호가 없어서 지번·층·면적으로 같은 호를 가립니다. 면적이 어림값이면 면적으로 가릴 수 없으므로 그 층 거래를 모두 뺍니다. 약 1/2.7 = e⁻¹: 50m 떨어진 거래는 바로 옆 거래의 약 37%만 반영.</div>
+        <div>예시의 거래 날짜·면적·건수는 data/trades.db에서 확인. 왼쪽 아이콘의 점·막대 위치는 <span class="tag i">설명용</span> 그림입니다.</div>
+      </div>
+      <div class="src">model/estimate.py same_unit_as_target() · estimate() · DISTANCE_SCALE_M=50 · TIME_SCALE_MONTHS=24 · SAME_BUILDING_BOOST=10 · model/holdout.py SAME_UNIT_AREA_TOLERANCE=0.5</div>
+    </div>
+  </div>
+</section>
+
+<!-- 5장. 가격 계산 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">4</span>가격 계산</div>
+      <h2>가격식으로 <em>보통 값</em>을 구하고, 주변 실거래가 비쌌는지 쌌는지로 고칩니다</h2>
+    </div>
+
+    <div class="fig">
+      <div class="two">
+        <div>
+          <div class="figcap"><span>화곡동 42-88 4층 29.87㎡</span><span class="tag e">예시 산출값</span></div>
+          <svg viewBox="0 0 900 470" role="img" aria-label="가격식만으로 낸 값 1억 8,870만 원에서 주변 실거래 보정 -21%를 적용해 추정 시세 1억 4,980만 원">
+            <g font-family="Noto Sans KR, Malgun Gothic, sans-serif">
+              <line x1="40" y1="410" x2="860" y2="410" stroke="#d9dee7" stroke-width="2"/>
+              <!-- 가격식만 -->
+              <rect x="80" y="70" width="300" height="340" rx="6" fill="#c9d3e4"/>
+              <text x="230" y="50" text-anchor="middle" font-size="34" font-weight="800" fill="#161a22">1억 8,870만 원</text>
+              <text x="230" y="452" text-anchor="middle" font-size="28" font-weight="700" fill="#586070">가격식만으로 낸 값</text>
+              <!-- 보정 -->
+              <line x1="380" y1="70" x2="560" y2="70" stroke="#8a91a0" stroke-width="2" stroke-dasharray="6 5"/>
+              <rect x="560" y="70" width="300" height="70" rx="6" fill="#fdecea" stroke="#b42318" stroke-width="2" stroke-dasharray="7 5"/>
+              <text x="710" y="117" text-anchor="middle" font-size="32" font-weight="800" fill="#b42318">−21%</text>
+              <path d="M400 230 L520 230" stroke="#586070" stroke-width="3"/>
+              <path d="M520 218 L542 230 L520 242 Z" fill="#586070"/>
+              <text x="470" y="190" text-anchor="middle" font-size="24" font-weight="700" fill="#586070">주변 실거래</text>
+              <text x="470" y="276" text-anchor="middle" font-size="24" font-weight="700" fill="#586070">보정</text>
+              <!-- 추정 시세 -->
+              <rect x="560" y="140" width="300" height="270" rx="6" fill="#2457d6"/>
+              <text x="710" y="200" text-anchor="middle" font-size="34" font-weight="800" fill="#ffffff">1억 4,980만 원</text>
+              <text x="710" y="452" text-anchor="middle" font-size="28" font-weight="700" fill="#161a22">추정 시세</text>
+            </g>
+          </svg>
+        </div>
+
+        <div class="formula">
+          <div class="term"><span class="op"></span><div class="box"><div class="t">가격식 ㎡당 가격</div><div class="d">이 동·연식·층·면적이면 보통 얼마</div>
+            <div class="chips"><span class="chip">동</span><span class="chip">거래 시점</span><span class="chip">연식</span><span class="chip">면적</span><span class="chip">층</span><span class="chip">연립·다세대</span><span class="chip">중개·직거래</span></div></div></div>
+          <div class="term"><span class="op">×</span><div class="box"><div class="t">(1 + 보정)</div><div class="d">주변 거래가 가격식보다 몇 % 비싸고 쌌는지를 3단계 점수로 가중평균</div></div></div>
+          <div class="term"><span class="op">×</span><div class="box"><div class="t">전용면적</div><div class="d">2단계에서 확인한 값</div></div></div>
+          <div class="term"><span class="op">=</span><div class="box res"><div class="t">추정 시세</div><div class="d">10만 원 단위로 반올림</div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div><b>대상 물건은 산출 기준일 2026-10-06에 중개거래로 팔린다고 가정</b>하고 가격식에 넣습니다. 가격식은 권역마다 따로 만든 회귀식이며, 이 물건과 같은 호의 거래는 빼고 만듭니다. 주변 거래가 거의 없으면 보정을 0 쪽으로 당깁니다(사전 가중 0.3).</div>
+        <div>예시 계산값: 가격식 188,717,021원 · 보정 −20.6%(근거 문장에는 −21%로 표시) · 추정 149,778,954원 → 1억 4,980만 원. data/trades.db로 다시 계산해 reports/sample_output.csv 3번과 같음을 확인.</div>
+      </div>
+      <div class="src">model/formula.py · model/estimate.py estimate() (deal_date=REF_DATE, is_direct=0, PRIOR_WEIGHT=0.3) · predict.py round_price()</div>
+    </div>
+  </div>
+</section>
+
+<!-- 6장. 신뢰도 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">5</span>신뢰도</div>
+      <h2>신뢰도는 추정가가 실제 거래가의 <em>±20% 안에 들 것으로 추정한 확률</em>입니다</h2>
+    </div>
+
+    <div class="fig">
+      <div class="conf">
+        <div>
+          <div class="figcap"><span>test 홀드아웃 2,381건 · predict 실행 경로 · 면적 입력</span><span class="tag m">실측</span></div>
+          <svg viewBox="0 0 1000 520" role="img" aria-label="신뢰도 구간별 말한 신뢰도와 실제로 ±20% 안에 든 비율. 0.6 미만 0.46 대 0.51, 0.6~0.7 0.65 대 0.60, 0.7~0.8 0.75 대 0.72, 0.8 이상 0.84 대 0.86">
+            <g font-family="Noto Sans KR, Malgun Gothic, sans-serif">
+              <!-- 범례 -->
+              <rect x="90" y="8" width="26" height="26" rx="4" fill="#d97a1f"/>
+              <text x="126" y="30" font-size="26" fill="#161a22">말한 신뢰도 (평균)</text>
+              <rect x="440" y="8" width="26" height="26" rx="4" fill="#2457d6"/>
+              <text x="476" y="30" font-size="26" fill="#161a22">실제로 ±20% 안에 든 비율</text>
+              <!-- 축: 0 ~ 1, y = 420 - v*320 -->
+              <g stroke="#e6e9ef" stroke-width="1.5">
+                <line x1="80" y1="420" x2="980" y2="420" stroke="#8a91a0"/>
+                <line x1="80" y1="356" x2="980" y2="356"/>
+                <line x1="80" y1="292" x2="980" y2="292"/>
+                <line x1="80" y1="228" x2="980" y2="228"/>
+                <line x1="80" y1="164" x2="980" y2="164"/>
+                <line x1="80" y1="100" x2="980" y2="100"/>
+              </g>
+              <g font-size="20" fill="#8a91a0" text-anchor="end">
+                <text x="70" y="427">0</text><text x="70" y="299">0.4</text><text x="70" y="171">0.8</text><text x="70" y="107">1.0</text>
+              </g>
+              <!-- 0.6 미만: 0.463 / 0.509 -->
+              <rect x="120" y="271.8" width="84" height="148.2" rx="4" fill="#d97a1f"/>
+              <rect x="206" y="257.1" width="84" height="162.9" rx="4" fill="#2457d6"/>
+              <text x="162" y="261" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.46</text>
+              <text x="248" y="246" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.51</text>
+              <!-- 0.6~0.7: 0.654 / 0.601 -->
+              <rect x="345" y="210.7" width="84" height="209.3" rx="4" fill="#d97a1f"/>
+              <rect x="431" y="227.7" width="84" height="192.3" rx="4" fill="#2457d6"/>
+              <text x="387" y="200" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.65</text>
+              <text x="473" y="217" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.60</text>
+              <!-- 0.7~0.8: 0.753 / 0.724 -->
+              <rect x="570" y="179" width="84" height="241" rx="4" fill="#d97a1f"/>
+              <rect x="656" y="188.3" width="84" height="231.7" rx="4" fill="#2457d6"/>
+              <text x="612" y="168" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.75</text>
+              <text x="698" y="177" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.72</text>
+              <!-- 0.8 이상: 0.839 / 0.863 -->
+              <rect x="795" y="151.5" width="84" height="268.5" rx="4" fill="#d97a1f"/>
+              <rect x="881" y="143.8" width="84" height="276.2" rx="4" fill="#2457d6"/>
+              <text x="837" y="140" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.84</text>
+              <text x="923" y="132" text-anchor="middle" font-size="24" font-weight="700" fill="#161a22">0.86</text>
+              <!-- 구간 이름 -->
+              <g font-size="26" font-weight="700" fill="#161a22" text-anchor="middle">
+                <text x="205" y="456">0.6 미만</text><text x="430" y="456">0.6 ~ 0.7</text><text x="655" y="456">0.7 ~ 0.8</text><text x="880" y="456">0.8 이상</text>
+              </g>
+              <g font-size="21" fill="#586070" text-anchor="middle">
+                <text x="205" y="486">234건</text><text x="430" y="486">233건</text><text x="655" y="486">702건</text><text x="880" y="486">1,212건</text>
+              </g>
+              <rect x="800" y="494" width="160" height="24" rx="12" fill="#e7eefd"/>
+              <text x="880" y="512" text-anchor="middle" font-size="18" font-weight="700" fill="#2457d6">화곡동 예시 0.81</text>
+            </g>
+          </svg>
+        </div>
+
+        <div class="side">
+          <div class="warnbox"><b>개별 물건이 맞는다는 보장이 아닙니다.</b> 신뢰도가 비슷한 물건을 모아 보면, ±20% 안에 든 비율이 그 값에 가까웠다는 뜻입니다.</div>
+          <div class="h">신뢰도를 올리고 내리는 조건</div>
+          <div class="factors">
+            <div class="factor"><span class="s up">▲</span>가깝고 최근인 근거 거래가 많을수록</div>
+            <div class="factor"><span class="s down">▼</span>근거 거래 값들이 들쭉날쭉할수록</div>
+            <div class="factor"><span class="s down">▼</span>지하층 · 1층 · 준공 1년 이내 · 30년 이상</div>
+            <div class="factor"><span class="s down">▼</span>면적·준공년도를 어림했을 때 (×0.5~0.9)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div>식은 dev 거래로 학습(로지스틱 회귀)하고, 그래프는 학습에 쓰지 않은 test로 잰 결과입니다. 전체 평균: <b>말한 신뢰도 0.76 · 실제 ±20% 이내 0.76</b>(README). 구간별 값은 reports/predict_check.csv의 면적 입력 2,381건을 신뢰도 구간으로 나눠 집계. 신뢰도는 0.05~0.95로 제한합니다.</div>
+        <div>화곡동 예시 신뢰도 0.81은 <span class="tag e">예시 산출값</span>이며, 이 물건이 ±20% 안에 든다는 뜻이 아니라 '0.8 이상' 구간에 속한다는 뜻입니다.</div>
+      </div>
+      <div class="src">model/confidence.py confidence_features() · assess() · model/confidence.json · reports/predict_check.csv · README.md</div>
+    </div>
+  </div>
+</section>
+
+<!-- 7장. 결과 -->
+<section class="slide">
+  <div class="inner">
+    <div class="top">
+      <div class="kick"><span class="no">6</span>결과</div>
+      <h2>한 값만 주지 않고 <em>가격 구간·신뢰도·근거</em>를 함께 적습니다</h2>
+    </div>
+
+    <div class="fig">
+      <div class="out">
+        <div>
+          <div class="figcap"><span>output.csv 한 줄 · 화곡동 42-88 4층 29.87㎡</span><span class="tag e">예시 산출값</span></div>
+          <div class="result">
+            <div class="head"><div class="k">추정 시세 (price_est)</div><div class="v">1억 4,980만 원</div></div>
+            <div class="band">
+              <svg viewBox="0 0 900 130" role="img" aria-label="가격 구간 1억 2,600만 원에서 1억 7,800만 원, 추정가 대비 -16%에서 +19%">
+                <g font-family="Noto Sans KR, Malgun Gothic, sans-serif">
+                  <line x1="40" y1="60" x2="860" y2="60" stroke="#d9dee7" stroke-width="4" stroke-linecap="round"/>
+                  <!-- 126.0 ~ 178.0, 추정 149.8. x = 120 + (v-126)/(178-126)*660 -->
+                  <line x1="120" y1="60" x2="780" y2="60" stroke="#2457d6" stroke-width="14" stroke-linecap="round" opacity=".28"/>
+                  <line x1="120" y1="44" x2="120" y2="76" stroke="#2457d6" stroke-width="4"/>
+                  <line x1="780" y1="44" x2="780" y2="76" stroke="#2457d6" stroke-width="4"/>
+                  <circle cx="422" cy="60" r="13" fill="#2457d6" stroke="#fff" stroke-width="3"/>
+                  <text x="120" y="31" text-anchor="middle" font-size="22" fill="#586070">−16%</text>
+                  <text x="780" y="31" text-anchor="middle" font-size="22" fill="#586070">+19%</text>
+                  <text x="422" y="31" text-anchor="middle" font-size="22" font-weight="700" fill="#2457d6">추정가</text>
+                  <text x="120" y="116" text-anchor="middle" font-size="28" font-weight="800" fill="#161a22">1억 2,600만</text>
+                  <text x="780" y="116" text-anchor="middle" font-size="28" font-weight="800" fill="#161a22">1억 7,800만</text>
+                  <text x="450" y="116" text-anchor="middle" font-size="22" fill="#586070">가격 구간</text>
+                </g>
+              </svg>
+            </div>
+            <div class="rows">
+              <div class="k">신뢰도</div><div class="v"><b>0.81</b></div>
+              <div class="k">근거</div><div class="v">같은 건물 3건·반경 100m 51건 실거래 반영(가격식 대비 −21%) / 2012년 준공 4층 29.87㎡ 다세대</div>
+              <div class="k">상태</div><div class="v"><b>ok</b> (실패하면 <b>fail: 사유</b>, 다음 줄은 계속 계산)</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="bandnote"><b>가격 구간</b>은 dev 검증에서 신뢰도 구간별로 <b>실제 거래가의 80%를 포함하도록 정한 폭</b>입니다. 신뢰도가 낮을수록 넓습니다.</div>
+          <table class="bands">
+            <tr><th>신뢰도</th><th>가격 구간 (추정가 대비)</th></tr>
+            <tr class="hit"><td>0.8 이상 ← 예시</td><td class="n">−16% ~ +19%</td></tr>
+            <tr><td>0.7 ~ 0.8</td><td class="n">−20% ~ +25%</td></tr>
+            <tr><td>0.6 ~ 0.7</td><td class="n">−26% ~ +36%</td></tr>
+            <tr><td>0.6 미만</td><td class="n">−34% ~ +51%</td></tr>
+          </table>
+          <div class="perf" style="margin-top:1.2cqw">
+            <div class="k"><span class="tag m">실측</span>test 2,381건 · predict 경로 · 면적 입력</div>
+            <div class="nums"><div class="num"><b>80%</b><span>실제 거래가가 가격 구간 안에 든 비율</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="notes">
+        <div>구간은 추정가에 같은 비율을 곱하고 나눠 만들어 아래쪽 폭과 위쪽 폭이 다릅니다. 구간 폭은 model/confidence.json에 저장된 값(dev에서 정함)이며 test에는 맞추지 않았습니다. 예시 값은 data/trades.db로 다시 계산해 reports/sample_output.csv 3번과 같음을 확인.</div>
+      </div>
+      <div class="src">predict.py predict() · basis_text() · model/confidence.py calibrate() INTERVAL_COVERAGE=0.80 · README.md「제출 프로그램을 그대로 돌린 검증」</div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // ?slide=N: N번째 장만 1920×1080으로 보여 준다 (PNG 캡처용)
+  (function () {
+    var n = parseInt(new URLSearchParams(location.search).get("slide"), 10);
+    var slides = document.querySelectorAll(".slide");
+    if (!n || n < 1 || n > slides.length) return;
+    document.documentElement.classList.add("render");
+    slides.forEach(function (s, i) { if (i + 1 !== n) s.remove(); });
+  })();
+</script>
+</body>
+</html>
