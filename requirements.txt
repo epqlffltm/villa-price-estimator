@@ -3,3 +3,4 @@ numpy>=2.5.3
 pandas>=3.0.6
 requests>=2.34.2
 scikit-learn>=1.9.1
+matplotlib>=3.9  # charts.py에서만 쓴다. predict.py 실행에는 필요 없다

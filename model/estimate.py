@@ -7,6 +7,8 @@
     4. 가격식 값 × (1 + 보정) × 전용면적 = 추정 시세
 
 대상과 같은 호로 보이는 거래(같은 지번·층·면적)는 쓰지 않는다.
+제출 프로그램(predict.py)은 estimate_target()을 쓴다. 물건마다 그 물건과 같은 호의 거래만 빼고 가격식을 만들기 때문에,
+입력 CSV에 다른 물건이 무엇이 있든 같은 물건은 항상 같은 값이 나온다.
 아래 네 개의 설정값은 홀드아웃 dev 쪽 오차를 재서 골랐다.
 """
 from dataclasses import dataclass
@@ -14,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from model.formula import PriceFormula, fit_formula
+from model.formula import FormulaData, PriceFormula, fit_formula, fit_without, prepare_formula
 from model.holdout import REF_DATE, SAME_UNIT_AREA_TOLERANCE
 
 DISTANCE_SCALE_M = 50.0       # 50m 멀어질 때마다 반영 비중이 약 1/2.7로 준다
@@ -127,3 +129,29 @@ def estimate(model: RegionModel, target: dict) -> dict:
         "weight_sum": weight_sum,                             # 근거가 된 거래의 양 (가중치 합)
         "spread": spread,                                     # 근거 거래들끼리 얼마나 흩어져 있는지 (로그 단위)
     }
+
+
+@dataclass
+class PreparedRegion:
+    """한 권역의 거래와, 가격식을 빨리 다시 만들기 위해 미리 계산해 둔 값."""
+    trades: pd.DataFrame
+    formula_data: FormulaData
+    usable: np.ndarray
+
+
+def prepare_region(region_trades: pd.DataFrame) -> PreparedRegion:
+    region_trades = region_trades.reset_index(drop=True)
+    return PreparedRegion(region_trades, prepare_formula(region_trades), region_trades["months_ago"].to_numpy() >= 0)
+
+
+def estimate_target(region: PreparedRegion, target: dict) -> dict:
+    """대상 한 건을 실행 규칙 그대로 추정한다.
+
+    1. 대상과 같은 호로 보이는 거래를 빼고 가격식을 만든다 (그 물건의 거래가를 외우지 않도록).
+    2. 그 가격식을 주변 실거래로 보정한다 (여기서도 같은 호는 빠진다).
+    다른 물건의 정보는 전혀 들어가지 않으므로, 한 건만 넣든 20건을 함께 넣든 결과가 같다.
+    """
+    data = region.formula_data
+    formula = fit_without(data, same_unit_as_target(region.trades, target))
+    residual = data.log_price - data.features @ formula.coefficients.to_numpy()
+    return estimate(RegionModel(region.trades, formula, residual, region.usable), target)

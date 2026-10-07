@@ -155,3 +155,11 @@ def test_one_broken_row_does_not_stop_the_rest(monkeypatch):
     outputs = predict([row(id="x"), row(id="y")], resolver, CONFIDENCE)
     assert outputs[0]["status"].startswith("fail: 처리 중 오류")
     assert outputs[1]["status"] == "ok"
+
+
+def test_estimate_does_not_depend_on_other_rows():
+    """같은 물건은 입력 CSV에 다른 줄이 몇 개 있든 같은 값이 나와야 한다."""
+    rows = [row(id="1"), row(id="2", jibun="101-1"), row(id="3", jibun="108-1", floor="3")]
+    together = predict(rows, make_resolver(), CONFIDENCE)
+    alone = [predict([one], make_resolver(), CONFIDENCE)[0] for one in rows]
+    assert together == alone

@@ -83,7 +83,10 @@ export KAKAO_REST_KEY=...
 ```
 predict.py            제출 프로그램. 입력 CSV -> 출력 CSV
 validate.py           홀드아웃으로 모델별 오차를 잰다
+validate_predict.py   제출 프로그램을 그대로 돌려 오차를 잰다 (면적 입력 / 면적 없음)
 report.py             검증 결과를 reports/validation.md로 정리한다
+chart_data.py         그래프에 쓸 숫자를 CSV로 뽑아 reports/charts/data/에 저장한다
+charts.py             그 CSV만 읽어 그래프를 그리고 reports/charts/에 PNG로 저장한다
 collect/
   fetch_trades.py     실거래가 API -> data/raw/trades/*.csv
   geocode_trades.py   지번 -> 좌표 (Kakao) -> geocode 테이블
@@ -103,7 +106,7 @@ model/
 data/trades.db        정제된 실거래와 좌표 (SQLite)
 reports/              검증 결과
 examples/input.csv    예시 입력
-tests/                테스트 117개
+tests/                테스트 119개
 ```
 
 ## 사용 데이터
@@ -126,6 +129,8 @@ tests/                테스트 117개
 
 추정 대상과 같은 호로 보이는 거래(같은 지번·층·면적)는 가격식 학습과 보정 양쪽에서 뺀다. 실거래가에는 호가 없어서 이 세 가지가 같으면 같은 호로 본다.
 
+물건은 한 건씩 따로 추정한다. 가격식도 물건마다 그 물건과 같은 호의 거래만 빼고 만들기 때문에, 같은 물건은 입력 CSV에 다른 줄이 몇 개 있든 같은 값이 나온다.
+
 ## 자체 검증
 
 기준일로부터 12개월 안의 거래 4,860건을 홀드아웃으로 삼았다. 지번 기준으로 반씩 나눠 dev(2,479건)로 설정값을 고르고 test(2,381건)는 성적 확인에만 썼다.
@@ -143,7 +148,24 @@ tests/                테스트 117개
 | 0.7 ~ 0.8 | 0.76 | 0.74 | ±25% |
 | 0.8 이상 | 0.84 | 0.87 | ±19% |
 
-조건별 오차, 크게 틀린 사례, 예시 산출 3건은 [reports/validation.md](reports/validation.md)에 있다.
+### 제출 프로그램을 그대로 돌린 검증
+
+위 표는 설정값을 고를 때 쓴 방식(`validate.py`)으로 잰 것이다. 실거래의 면적을 그대로 쓰고, 가격식은 지번 5묶음 중 맞혀 볼 묶음의 최근 12개월 거래를 전부 빼고 만든다. 제출 프로그램은 대상과 같은 호의 거래만 빼므로 방식이 조금 다르다.
+
+그래서 같은 test 2,381건을 입력 한 줄(시군구·동·지번·층)로 바꿔 `predict()`에 그대로 넣고 다시 쟀다(`validate_predict.py`). 값 채우기, 물건별 가격식, 신뢰도 감점까지 채점 때와 같은 경로다.
+
+| 입력 | 실패 | 중앙값 오차율 | 20% 이내 | 말한 신뢰도 | 실제로 20% 이내 | 가격 구간에 든 비율 |
+|---|---|---|---|---|---|---|
+| 면적 입력 | 0건 | 10.6% | 76.1% | 0.76 | 0.76 | 0.80 |
+| 면적 없음 (키 없이 DB만) | 0건 | 11.2% | 73.7% | 0.70 | 0.74 | 0.83 |
+
+- 면적을 넣으면 `validate.py`의 결과(10.6%, 76.4%)와 같은 수준이다.
+- 면적을 비우면 같은 건물 실거래 기록에서 면적을 찾는다. 오차가 0.6%p 커지고, 신뢰도는 그보다 더 낮게(0.70) 말한다.
+- 실거래가에는 호가 없어서, 건축물대장에서 호로 면적을 찾는 경로는 이 표에 들어 있지 않다. `--online --sample 100`으로 일부를 조회해 볼 수 있다.
+
+조건별 오차, 크게 틀린 사례, 예시 산출 3건은 [reports/validation.md](reports/validation.md)에, 그래프는 [reports/charts/](reports/charts/)에, 그래프에 쓴 숫자는 [reports/charts/data/](reports/charts/data/)에 CSV로 있다.
+
+![오차 구간별 물건 비율](reports/charts/03_error_bands.png)
 
 ## 다시 만들기
 
@@ -156,6 +178,9 @@ uv run --env-file .env python -m collect.geocode_trades
 uv run python validate.py --save reports/holdout.csv
 uv run python -m model.confidence
 uv run python report.py
+uv run python validate_predict.py
+uv run python chart_data.py
+uv run python charts.py
 uv run pytest
 ```
 
@@ -165,4 +190,4 @@ uv run pytest
 - 지하층(중앙값 오차율 19.8%)과 준공 30년 이상(14.3%)에서 오차가 크다. 재개발 기대처럼 실거래가에 없는 요인이 가격을 움직인다.
 - 준공 1년 이내 신축은 12.2% 높게 추정하는 경향이 있다.
 - 추정은 기준일 시세다. 9~12개월 전 거래와 비교하면 그사이 시세 변화만큼 차이가 난다.
-- 면적·준공년도를 어림한 경우의 신뢰도 감점은 검증 표본이 없어 규칙으로 정했다.
+- 면적·준공년도를 어림한 경우의 신뢰도 감점은 규칙으로 정했다. 면적을 비운 검증에서는 말한 신뢰도(0.70)가 실제(0.74)보다 낮아 조심스러운 쪽이다. 건축물대장에서 호로 면적을 찾는 경로는 대량으로 검증하지 못했다.

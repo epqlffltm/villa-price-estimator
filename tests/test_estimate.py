@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from model.estimate import distance_m, estimate, fit_region, make_target
+from model.estimate import distance_m, estimate, estimate_target, fit_region, make_target, prepare_region, same_unit_as_target
 from model.holdout import add_holdout_columns
 
 BASE_PER_M2 = 10_000_000
@@ -86,3 +86,16 @@ def test_unknown_lot_without_coordinates_falls_back_to_formula():
     assert result["weight_sum"] == 0
     assert np.isnan(result["spread"])
     assert result["price"] == pytest.approx(result["formula_price"])
+
+
+
+def test_fast_refit_gives_the_same_price_as_a_full_refit():
+    """합계에서 덜어내는 빠른 계산(estimate_target)이, 같은 호를 빼고 처음부터 다시 만든 가격식과 같은 값을 낸다."""
+    trades = make_neighborhood()
+    region = prepare_region(trades)
+    for lot, floor in [("100-1", 2), ("101-1", 1), ("130-1", 4)]:
+        target = target_in(lot, floor)
+        slow = estimate(fit_region(trades, exclude=same_unit_as_target(trades, target)), target)
+        fast = estimate_target(region, target)
+        assert fast["price"] == pytest.approx(slow["price"], rel=1e-6)
+        assert fast["n_same_building"] == slow["n_same_building"]

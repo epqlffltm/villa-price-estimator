@@ -10,6 +10,7 @@
   DATA_GO_KR_KEY  건축물대장(전용면적·준공년도). 없으면 실거래 기록으로 어림한다.
   KAKAO_REST_KEY  수집되지 않은 지번의 좌표. 없으면 같은 건물 거래만 반영한다.
 어떤 줄에서 문제가 생겨도 멈추지 않고, 그 줄의 status에 fail과 사유를 적는다.
+물건은 한 건씩 따로 추정한다. 같은 물건은 다른 줄에 무엇이 있든 같은 값이 나온다.
 """
 import argparse
 import os
@@ -18,11 +19,10 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from model.confidence import MODEL_PATH, ConfidenceModel
-from model.estimate import NEARBY_RADIUS_M, estimate, fit_region, same_unit_as_target
+from model.estimate import NEARBY_RADIUS_M, PreparedRegion, estimate_target, prepare_region
 from model.holdout import DB_PATH, load_trades
 from model.resolve import InputError, Resolved, Resolver
 
@@ -77,31 +77,26 @@ def predict(rows: list[dict], resolver: Resolver, confidence_model: ConfidenceMo
         except Exception as e:  # 예상하지 못한 문제도 그 줄만 실패로 남긴다
             outputs[index]["status"] = f"fail: 처리 중 오류({type(e).__name__}: {e})"
 
-    for region, region_trades in resolver.trades.items():
-        indexes = [index for index, item in resolved.items() if item.region == region]
-        if not indexes:
-            continue
-        # 추정 대상과 같은 호로 보이는 거래는 가격식 학습에서도 뺀다.
-        exclude = np.zeros(len(region_trades), dtype=bool)
-        for index in indexes:
-            exclude |= same_unit_as_target(region_trades, resolved[index].target)
-        model = fit_region(region_trades, exclude)
-        for index in indexes:
-            item = resolved[index]
-            try:
-                result = estimate(model, item.target)
-                rated = confidence_model.assess(result["price"], item.target["floor"], item.target["build_year"],
-                                                result["weight_sum"], result["spread"], item.penalty)
-                outputs[index].update({
-                    "price_est": round_price(result["price"]),
-                    "price_low": round_price(rated["price_low"]),
-                    "price_high": round_price(rated["price_high"]),
-                    "confidence": rated["confidence"],
-                    "basis": basis_text(item.target, result, item.notes),
-                    "status": "ok",
-                })
-            except Exception as e:
-                outputs[index]["status"] = f"fail: 추정 중 오류({type(e).__name__}: {e})"
+    # 물건마다 따로 추정한다. 가격식도 물건마다 그 물건과 같은 호의 거래만 빼고 만들기 때문에,
+    # 같은 물건은 입력 CSV에 다른 줄이 몇 개 있든 같은 값이 나온다.
+    prepared: dict[str, PreparedRegion] = {}  # 권역마다 한 번만 준비해 두고 다시 쓴다
+    for index, item in resolved.items():
+        try:
+            if item.region not in prepared:
+                prepared[item.region] = prepare_region(resolver.trades[item.region])
+            result = estimate_target(prepared[item.region], item.target)
+            rated = confidence_model.assess(result["price"], item.target["floor"], item.target["build_year"],
+                                            result["weight_sum"], result["spread"], item.penalty)
+            outputs[index].update({
+                "price_est": round_price(result["price"]),
+                "price_low": round_price(rated["price_low"]),
+                "price_high": round_price(rated["price_high"]),
+                "confidence": rated["confidence"],
+                "basis": basis_text(item.target, result, item.notes),
+                "status": "ok",
+            })
+        except Exception as e:
+            outputs[index]["status"] = f"fail: 추정 중 오류({type(e).__name__}: {e})"
     return outputs
 
 
