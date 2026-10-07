@@ -6,6 +6,7 @@
 
   좌표       수집해 둔 geocode 테이블 -> Kakao 주소 검색 -> 없음(같은 건물 거래만 반영)
   전용면적    입력 -> 건축물대장(호, 없으면 같은 층) -> 같은 건물 같은 층 실거래 -> 같은 건물 실거래 -> 동 중앙값
+             (호는 "201", "201호", "B동 201", "102-402"처럼 동을 함께 적어도 된다)
   준공년도    같은 지번 실거래 -> 건축물대장 표제부 -> 주변 실거래 중앙값
 
 실거래·좌표·건축물대장 어디에도 없는 지번은 추정하지 않고 실패로 돌려준다.
@@ -142,10 +143,12 @@ class Resolver:
         if area and area > 0:
             return area, False
 
-        found = building.find_unit_area(register.area_items(), floor, ho) if register.available else None
+        # 같은 호 이름이 여러 동에 있을 때 가리는 데 쓴다: 이 지번·이 층에서 실제로 거래된 면적들
+        traded_areas = list(lot_trades.loc[lot_trades["floor"] == floor, "area_m2"])
+        found = building.find_unit_area(register.area_items(), floor, ho, traded_areas) if register.available else None
         if found:
             resolved.notes.append(f"면적 {found[0]}㎡({found[1]})")
-            if "중앙값" in found[1]:  # 호를 특정하지 못하고 같은 층에서 고른 경우
+            if building.is_guess(found[1]):  # 호를 하나로 특정하지 못한 경우
                 resolved.penalty *= 0.9
                 return found[0], True
             return found[0], False

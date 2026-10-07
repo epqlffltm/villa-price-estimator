@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from model.confidence import (BAND_NAMES, HOLDOUT_PATH, INTERVAL_COVERAGE, MODEL_PATH, PRICE_COLUMN, ConfidenceModel,
+from model.confidence import (BAND_NAMES, HOLDOUT_PATH, INTERVAL_COVERAGE, MODEL_PATH, PRICE_COLUMN, ConfidenceModel, interval_text,
                               reliability_table)
 from model.estimate import (DISTANCE_SCALE_M, PRIOR_WEIGHT, SAME_BUILDING_BOOST, TIME_SCALE_MONTHS)
 from model.formula import fit_formula
@@ -128,11 +128,12 @@ def section_confidence(holdout: pd.DataFrame, model: ConfidenceModel) -> str:
     coefficients = pd.DataFrame([{"조건": "기준값", "계수": model.intercept},
                                  *[{"조건": name, "계수": value} for name, value in model.coefficients.items()]])
     widths = pd.DataFrame({"신뢰도 구간": BAND_NAMES,
-                           "가격 구간 폭_±%": [round((np.exp(w) - 1) * 100) for w in model.half_widths]})
+                           "가격 구간(추정가 대비)": [interval_text(w) for w in model.half_widths]})
     return "\n\n".join([
         "## 4. 신뢰도와 가격 구간",
         "신뢰도 = 추정가가 실제 거래가의 ±20% 안에 들 확률. dev 결과로 로지스틱 회귀를 학습했다. "
-        f"가격 구간은 신뢰도 구간별로 dev에서 실제 거래가의 {INTERVAL_COVERAGE:.0%}가 들어온 폭이다.",
+        f"가격 구간은 신뢰도 구간별로 dev에서 실제 거래가의 {INTERVAL_COVERAGE:.0%}가 들어온 폭이다. "
+        "구간은 추정가에 같은 비율을 곱하고 나눠 만들기 때문에 아래쪽 폭과 위쪽 폭이 다르다.",
         "### 신뢰도 식의 계수 (음수면 신뢰도를 낮춘다)", markdown_table(coefficients),
         "### 신뢰도 구간별 가격 구간 폭", markdown_table(widths),
         "### 말한 신뢰도와 실제 (test)", markdown_table(reliability_table(test, model)),

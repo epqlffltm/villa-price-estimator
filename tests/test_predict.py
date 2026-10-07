@@ -163,3 +163,20 @@ def test_estimate_does_not_depend_on_other_rows():
     together = predict(rows, make_resolver(), CONFIDENCE)
     alone = [predict([one], make_resolver(), CONFIDENCE)[0] for one in rows]
     assert together == alone
+
+
+def test_validation_can_hide_the_targets_own_trade():
+    """검증에서 대상 거래를 DB에서 지우면, 그 거래의 면적을 되찾지 못하고 건물의 다른 거래로 어림한다."""
+    from validate_predict import predict_without_own_trade
+
+    resolver = make_resolver()
+    trades = resolver.trades["관악구"]
+    own = trades[(trades["jibun"] == "100-1") & (trades["floor"] == 2)].iloc[0]
+    blank = row(id=str(own["trade_id"]), area_m2="")
+
+    seen = predict([blank], resolver, CONFIDENCE)[0]
+    unseen = predict_without_own_trade(blank, "관악구", resolver, CONFIDENCE)
+    assert "2층 실거래 기준" in seen["basis"]
+    assert "같은 건물 실거래 중앙값" in unseen["basis"]
+    assert unseen["confidence"] < seen["confidence"]
+    assert len(resolver.trades["관악구"]) == len(trades)  # 끝나면 DB가 원래대로 돌아온다
