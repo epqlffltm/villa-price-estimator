@@ -57,6 +57,10 @@ uv run python predict.py --input examples/input.csv --output output.csv
 
 한 줄에서 문제가 생겨도 멈추지 않고, 그 줄만 `fail`로 남긴다. 권역 밖 주소, 읽을 수 없는 지번·층, 실거래·좌표·건축물대장 어디에서도 확인되지 않는 지번이 실패 사유다.
 
+출력 파일은 UTF-8(BOM 포함)로 저장한다. 엑셀에서 열어도 한글이 깨지지 않게 하기 위해서다. 
+pandas는 그대로 읽고, 파이썬 기본 `open()`으로 읽을 때는 `encoding="utf-8-sig"`를 쓴다. 
+실패한 줄은 가격 세 칸을 비우고 `confidence`를 0으로 적는다. 입력 파일은 UTF-8(BOM 있어도 됨)과 CP949를 모두 읽는다.
+
 ## API 키 (선택)
 
 수집해 둔 `data/trades.db`만으로도 동작한다. 아래 키를 환경변수로 넣으면 DB에 없는 값을 실행 중에 조회한다.
