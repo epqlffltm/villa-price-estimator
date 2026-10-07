@@ -12,7 +12,8 @@ validate.py 와의 차이
   면적 입력               입력에 면적이 있는 경우
   면적 없음               면적을 비운 경우. 같은 건물 실거래 기록에서 면적을 찾는다.
                           이때 대상 물건 자신의 거래 기록도 DB에 있으므로, 그 기록에서 면적을 되찾는 경우가 많다.
-  면적 없음·기록 없는 물건  대상 거래를 DB에서 지우고 잰다. 수집일 뒤에 신고된 거래처럼, DB에 기록이 없는 물건의 성능이다.
+  면적 없음·대상 거래 제외  대상 거래 한 건을 DB에서 지우고 잰다. 수집일 뒤에 신고된 거래의 물건이 이 조건에 해당한다.
+                          같은 호의 이전 거래는 지우지 않는다. 그런 거래가 남아 있으면 그 면적을 쓸 수 있다.
 
 --online (환경변수의 키로 건축물대장·Kakao를 조회한다. 호출 수가 많으므로 일부만 뽑아 잰다)
   면적 없음·호 없음        건축물대장의 같은 층 호들에서 면적을 고른다.
@@ -118,7 +119,7 @@ def offline_cases(test: pd.DataFrame, resolver: Resolver, confidence_model: Conf
     return [
         run_case("면적 입력", test, with_area, resolver, confidence_model),
         run_case("면적 없음", test, no_area, resolver, confidence_model),
-        run_case("면적 없음·기록 없는 물건", test, no_area, resolver, confidence_model, without_own_trade=True),
+        run_case("면적 없음·대상 거래 제외", test, no_area, resolver, confidence_model, without_own_trade=True),
     ]
 
 

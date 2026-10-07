@@ -118,51 +118,81 @@ def is_guess(method: str) -> bool:
 def find_unit_area(items: list[dict], floor: int, ho: str = "", hint_areas=()) -> tuple[float, str] | None:
     """전유공용면적 목록에서 대상 호의 전용면적을 찾아 (면적, 찾은 방법)을 돌려준다.
 
-    1. 같은 층에서 호 이름이 같은 것 ("301" = "301호" = "제301호")
-    2. 같은 층에서 호의 숫자가 같은 것 ("301" = "0301호")
-    3. 층은 다르지만 호 이름이 같은 것 (입력의 층이 대장과 다르게 적힌 경우)
-    4. 호가 없거나 못 찾으면 같은 층 호들의 전유 면적 중앙값
+    호를 찾는 순서
+      1. 같은 층에서 호 이름이 같은 것 ("301" = "301호" = "제301호")
+      2. 같은 층에서 호의 숫자가 같은 것 ("301" = "0301호")
+      3. 층은 다르지만 호 이름이 같은 것 (입력의 층이 대장과 다르게 적힌 경우)
+      4. 호가 없거나 못 찾으면 같은 층 호들의 전유 면적 중앙값
+
+    입력에 동이 함께 적힌 경우 ("B동 201", "102-402")
+      - 그 동이 대장에 있으면 그 동 안에서만 찾는다.
+      - 대장에 동 이름이 적혀 있는데 그 동이 없으면, 호 이름만으로 찾되 "추정"으로 표시한다.
+        (A동만 있는 대장에서 "B동 201"로 A동 201호를 찾은 것은 확정이 아니다.)
+      - 대장에 동 이름이 아예 없으면(건물이 하나) 동은 확인할 수 없으므로 호 이름만으로 찾는다.
+      "201-2"처럼 호 이름 자체에 줄표가 있는 경우는, 그 이름 그대로인 호가 있으면 그것을 먼저 고른다.
 
     같은 호 이름이 여러 동에 있으면
-      - 입력에 동이 적혀 있으면 그 동의 호
       - hint_areas(이 지번·이 층에서 실제로 거래된 면적들)와 면적이 같은 동이 하나뿐이면 그 동의 호 ("추정")
       - 가릴 수 없으면 동별 면적의 중앙값
+
     is_guess(찾은 방법)이 True면 호를 하나로 특정하지 못했다는 뜻이다.
     """
     owned = [item for item in items if str(item.get("exposPubuseGbCd")) == "1" and _to_float(item.get("area"))]
-
-    # 입력에 적힌 동이 대장에 실제로 있는 동이면 그 동만 본다.
     wanted_dong, rest = split_dong_ho(ho)
     in_dong = [item for item in owned if wanted_dong and normalize_dong(item.get("dongNm")) == wanted_dong]
+    has_dong_names = any(normalize_dong(item.get("dongNm")) for item in owned)
+
+    # (찾을 범위, 호 이름, 이름이 정확히 같은 것만 볼지, 동을 확인하지 못했는지)
     if in_dong:
-        owned, ho = in_dong, rest
+        attempts = [(in_dong, rest, False, False)]
+        owned = in_dong
+    elif wanted_dong:
+        attempts = [(owned, ho, True, False),                    # "201-2"가 호 이름 그대로인 경우
+                    (owned, rest, False, has_dong_names)]        # 동을 뗀 호 이름으로. 대장에 동 이름이 있었다면 동 불일치
+    else:
+        attempts = [(owned, ho, False, False)]
+
+    for pool, name, exact_only, dong_missing in attempts:
+        matched = _match_ho(pool, floor, name, exact_only)
+        if matched:
+            area, method = _area_of(matched, hint_areas)
+            if dong_missing and not is_guess(method):
+                method += f", 입력한 동({wanted_dong})이 대장에 없어 호 이름만으로 추정"
+            return area, method
 
     on_floor = [item for item in owned if _same_floor(item, floor)]
-    wanted = normalize_ho(ho)
-    if wanted:
-        candidates = [
-            [item for item in on_floor if normalize_ho(item.get("hoNm")) == wanted],
-            [item for item in on_floor if _digits(wanted) and _digits(normalize_ho(item.get("hoNm"))) == _digits(wanted)],
-            [item for item in owned if normalize_ho(item.get("hoNm")) == wanted],
-        ]
-        for matched in candidates:
-            if matched:
-                # 한 호에 전유 항목이 여럿이면 합한다. 같은 호 이름이 여러 동에 있으면 동별로 따로 본다.
-                per_building = _sum_by(matched, lambda item: str(item.get("dongNm") or "").strip())
-                name = str(matched[0].get("hoNm")).strip()
-                areas = sorted(per_building.values())
-                if len(per_building) == 1 or areas[-1] - areas[0] < 0.01:
-                    dong = next(iter(per_building)) if len(per_building) == 1 else ""
-                    return round(areas[0], 2), f"건축물대장 {dong + ' ' if dong else ''}{name}"
-                traded = {round(area, 2) for area in areas if any(abs(area - hint) < 0.5 for hint in hint_areas)}
-                if len(traded) == 1:
-                    return traded.pop(), f"건축물대장 {name}, 동 {len(per_building)}개 중 이 층에서 거래된 면적으로 추정"
-                return round(statistics.median(areas), 2), f"건축물대장 {name}, 동 {len(per_building)}개 중앙값"
-
     per_unit = _sum_by(on_floor, lambda item: (str(item.get("dongNm") or "").strip(), normalize_ho(item.get("hoNm"))))
     if per_unit:
         return round(statistics.median(per_unit.values()), 2), f"건축물대장 {floor}층 {len(per_unit)}개 호 중앙값"
     return None
+
+
+def _match_ho(owned: list[dict], floor: int, ho: str, exact_only: bool = False) -> list[dict]:
+    """호 이름이 맞는 전유 항목들. exact_only면 같은 층에서 이름이 정확히 같은 것만 본다."""
+    wanted = normalize_ho(ho)
+    if not wanted:
+        return []
+    on_floor = [item for item in owned if _same_floor(item, floor)]
+    same_name = [item for item in on_floor if normalize_ho(item.get("hoNm")) == wanted]
+    if same_name or exact_only:
+        return same_name
+    same_digits = [item for item in on_floor if _digits(wanted) and _digits(normalize_ho(item.get("hoNm"))) == _digits(wanted)]
+    return same_digits or [item for item in owned if normalize_ho(item.get("hoNm")) == wanted]
+
+
+def _area_of(matched: list[dict], hint_areas=()) -> tuple[float, str]:
+    """이름이 맞는 전유 항목들에서 (면적, 찾은 방법)을 정한다. 같은 호 이름이 여러 동에 있으면 가려 본다."""
+    # 한 호에 전유 항목이 여럿이면 합한다. 같은 호 이름이 여러 동에 있으면 동별로 따로 본다.
+    per_building = _sum_by(matched, lambda item: str(item.get("dongNm") or "").strip())
+    name = str(matched[0].get("hoNm")).strip()
+    areas = sorted(per_building.values())
+    if len(per_building) == 1 or areas[-1] - areas[0] < 0.01:
+        dong = next(iter(per_building)) if len(per_building) == 1 else ""
+        return round(areas[0], 2), f"건축물대장 {dong + ' ' if dong else ''}{name}"
+    traded = {round(area, 2) for area in areas if any(abs(area - hint) < 0.5 for hint in hint_areas)}
+    if len(traded) == 1:
+        return traded.pop(), f"건축물대장 {name}, 동 {len(per_building)}개 중 이 층에서 거래된 면적으로 추정"
+    return round(statistics.median(areas), 2), f"건축물대장 {name}, 동 {len(per_building)}개 중앙값"
 
 
 def floor_units(items: list[dict], floor: int) -> dict[tuple[str, str], float]:
