@@ -89,6 +89,39 @@ def fit_formula(region_trades: pd.DataFrame, exclude: np.ndarray | None = None) 
     return PriceFormula(dongs=dongs, coefficients=pd.Series(coefficients, index=features.columns))
 
 
+@dataclass
+class FormulaData:
+    """한 권역의 거래를 회귀식에 넣을 숫자로 바꿔 둔 것. 가격식을 여러 번 만들 때 한 번만 계산해 두고 다시 쓴다."""
+    dongs: list[str]
+    columns: pd.Index
+    features: np.ndarray    # 거래 수 × 요인 수
+    log_price: np.ndarray   # 거래마다 log(㎡당 가격)
+    xtx: np.ndarray         # 요인끼리 곱해 모든 거래에 대해 더한 값 (요인 수 × 요인 수)
+    xty: np.ndarray         # 요인과 log 가격을 곱해 더한 값
+
+
+def prepare_formula(region_trades: pd.DataFrame) -> FormulaData:
+    dongs = list(region_trades["dong"].value_counts().index)
+    table = build_features(region_trades, dongs)
+    features = table.to_numpy()
+    log_price = np.log((region_trades["price"] / region_trades["area_m2"]).to_numpy().astype(float))
+    return FormulaData(dongs, table.columns, features, log_price, features.T @ features, features.T @ log_price)
+
+
+def fit_without(data: FormulaData, exclude: np.ndarray) -> PriceFormula:
+    """exclude 행을 뺀 거래로 가격식을 만든다. fit_formula(거래, exclude)와 같은 식이 나온다.
+
+    최소제곱법의 답은 두 합계(xtx, xty)만 있으면 구할 수 있다. 전체 거래로 구해 둔 합계에서
+    뺄 거래의 몫만 덜어내면 되므로, 거래 1만 건을 매번 다시 계산하지 않아도 된다.
+    물건마다 가격식을 따로 만드는 predict.py가 이 함수를 쓴다.
+    """
+    out_features, out_price = data.features[exclude], data.log_price[exclude]
+    xtx = data.xtx - out_features.T @ out_features
+    xty = data.xty - out_features.T @ out_price
+    coefficients, *_ = np.linalg.lstsq(xtx, xty, rcond=None)
+    return PriceFormula(dongs=data.dongs, coefficients=pd.Series(coefficients, index=data.columns))
+
+
 def main() -> None:
     from model.holdout import load_trades
 
